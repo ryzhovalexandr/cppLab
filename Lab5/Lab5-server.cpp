@@ -56,16 +56,24 @@ struct Cashier
 {
 	int id;
 	queue<Customer> queue;
-	HANDLE mutex = NULL;
-	HANDLE thread = NULL;
+	HANDLE mutex;
+	HANDLE thread;
 	int total_sum = 0;
 
 	Cashier(int id, Customer customer) {
 		this->id = id;
 		this->queue.push(customer);
 		this->mutex = CreateMutex(NULL, 0, NULL);
-		if (this->mutex) {
+		if (!this->mutex) {
 			printf("Ошибка при создании мьютекса: %d\n", GetLastError());
+			system("pause");
+			exit(1);
+		}
+
+		thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)worker, (LPVOID)this, 0, NULL);
+		if (thread == NULL)
+		{
+			printf("Ошибка при создании потока: %d\n", GetLastError());
 			system("pause");
 			exit(1);
 		}
@@ -80,24 +88,21 @@ struct Cashier
 
 	bool lockQueue()
 	{
-		DWORD dwWaitResult = WaitForSingleObject(this->mutex, INFINITE);
-		return (dwWaitResult == WAIT_OBJECT_0);
+		while (true) {
+			DWORD dwWaitResult = WaitForSingleObject(this->mutex, INFINITE);
+			if (dwWaitResult == WAIT_OBJECT_0)
+			{
+				return true;
+			}
+
+			printf("Ждем блокировки очереди на кассе %d: результат %d\n", id, dwWaitResult);
+			Sleep(1000);
+		}
 	}
 
 	void unlockQueue()
 	{
 		ReleaseMutex(this->mutex);
-	}
-
-	void startWork()
-	{
-		thread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)worker, (LPVOID)this, 0, NULL);
-		if (thread == NULL)
-		{
-			printf("Ошибка при создании потока: %d\n", GetLastError());
-			system("pause");
-			exit(1);
-		}
 	}
 };
 
@@ -119,7 +124,7 @@ int main()
 	printf("Введите количество кассиров X: ");
 	cin >> cashiersMaxCount;
 
-	printf("Магазин начал свою работу. Ждем покупателей.");
+	printf("Магазин начал свою работу. Ждем покупателей.\n");
 
 	while (true)
 	{
@@ -163,7 +168,7 @@ void waitingForCustomer(HANDLE& pipe)
 	while (true) {
 		if (ConnectNamedPipe(pipe, NULL))
 		{
-			printf("Новый покупатель\n");
+			printf("Новый покупатель подошел к кассам\n");
 			break;
 		}
 	}
@@ -182,17 +187,26 @@ Cashier chooseCashier(Customer customer)
 	cashierIndex = rand() % cashiers.size();
 	Cashier cashier = cashiers.at(cashierIndex);
 
-	if (cashier.lockQueue())
+	if (!cashier.lockQueue())
 	{
-
-		if (cashier.queue.size() < 3 || !addCashier(customer))
-		{
-			cashier.queue.push(customer);
-			return cashier;
-		}
-
-		cashier.unlockQueue();
+		printf("Не удалось заблокировать очередь на кассе %d\n", cashier.id);
+		system("pause");
+		exit(1);
 	}
+
+	// если на кассе 3 и более человек в очереди, пробуем позвать нового кассира
+	if (cashier.queue.size() > 2)
+	{
+		if (addCashier(customer))
+		{
+			cashier.unlockQueue();
+			return cashiers.at(cashiers.size() - 1);
+		}
+	}
+
+	cashier.queue.push(customer);
+	cashier.unlockQueue();
+	return cashier;
 }
 
 bool addCashier(Customer customer)
@@ -200,6 +214,8 @@ bool addCashier(Customer customer)
 	if (cashiers.size() < cashiersMaxCount)
 	{
 		int cashier_id = cashiers.size() + 1;
+		printf("Позвали нового кассира %d\n", cashier_id);
+
 		Cashier cashier(cashier_id, customer);
 		cashiers.push_back(cashier);
 		return true;
@@ -212,30 +228,37 @@ DWORD WINAPI worker(LPVOID lpParam)
 {
 	Cashier* cashier = (Cashier*)lpParam;
 
+	printf("Кассир %d встал за кассу и ждем покупателей\n", cashier->id);
+
 	while (true)
 	{
-		if (cashier->lockQueue())
+		if (!cashier->lockQueue())
 		{
-			if (cashier->queue.size() == 0) {
-				Sleep(1000);
-				continue;
-			}
-			Customer* customer = &cashier->queue.front();
-			cashier->queue.pop();
-
-			cashier->unlockQueue();
-
-
-			printf("Обслуживаем покупателя %d на кассе %d", customer->id, cashier->id);
-			Sleep(2000);
-			cashier->total_sum += customer->sum;
-
-			printf("Обслужили покупателя %d на кассе %d", customer->id, cashier->id);
-			customer->send("Done");
-			delete customer;
+			printf("Ошибка блокировки очереди на кассе %d\n", cashier->id);
+			system("pause");
+			exit(1);
 		}
+
+		if (cashier->queue.size() == 0) {
+			Sleep(1000);
+			continue;
+		}
+		Customer* customer = &cashier->queue.front();
+		cashier->queue.pop();
+
+		cashier->unlockQueue();
+
+
+		printf("Обслуживаем покупателя %d на кассе %d\n", customer->id, cashier->id);
+		Sleep(2000);
+		cashier->total_sum += customer->sum;
+
+		printf("Обслужили покупателя %d на кассе %d\n", customer->id, cashier->id);
+		customer->send("Done");
+		delete customer;
 	}
-	printf("Завершаем обслуживание на кассе %d", cashier->id);
+
+	printf("Завершаем обслуживание на кассе %d\n", cashier->id);
 	system("pause");
 	ExitThread(0);
 }

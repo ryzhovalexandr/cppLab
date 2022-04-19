@@ -17,13 +17,13 @@ int main()
 {
 	setlocale(LC_ALL, "Russian");
 
-	printf("Покупатель начал свои покупки. process id=%d", GetCurrentProcessId());
+	printf("Покупатель начал свои покупки. process id=%d\n", GetCurrentProcessId());
 
 	int duration = rand() % 9000 + 1000;
 	Sleep(duration);
 
 	int sum = rand() % 14000 + 1000;
-	printf("Покупатель набрал товар на сумму %d и пошел к кассам", sum);
+	printf("Покупатель набрал товар на сумму %d руб и пошел к кассам\n", sum);
 
 	HANDLE hPipe = createPipe();
 
@@ -80,7 +80,7 @@ HANDLE createPipe()
 		}
 
 		if (!WaitNamedPipe(TEXT("\\\\.\\pipe\\shop"), 10000)) {
-			printf("Не дождались открытия магазина в течение 10 секунд");
+			printf("Не дождались открытия магазина в течение 10 секунд\n");
 			system("pause");
 			exit(1);
 		}
@@ -90,8 +90,9 @@ HANDLE createPipe()
 string readData(HANDLE hPipe)
 {
 	if (!ReadFile(hPipe, buf, BUFSIZE, &dwBytes, NULL)) {
-		printf("Ошибка получения данных.\n");
-		return NULL;
+		printf("Ошибка получения данных из канала.\n");
+		system("pause");
+		exit(1);
 	}
 
 	string msg(buf, 0, dwBytes);
