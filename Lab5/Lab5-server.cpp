@@ -23,6 +23,7 @@
 #include <windows.h>
 #include <vector>
 #include <queue>
+#include <string>
 
 #define BUFSIZE 1024
 
@@ -31,6 +32,7 @@ using namespace std;
 DWORD WINAPI worker(LPVOID lpParam);
 HANDLE createPipe();
 void waitingForCustomer(HANDLE& pipe);
+void writeToPipe(HANDLE hPipe, string str);
 
 // Покупатель
 struct Customer
@@ -45,9 +47,14 @@ struct Customer
 		this->sum = sum;
 	};
 
+	~Customer()
+	{
+		CloseHandle(hPipe);
+	}
+
 	void send(string message)
 	{
-
+		writeToPipe(hPipe, message);
 	}
 };
 
@@ -55,12 +62,12 @@ struct Customer
 struct Cashier
 {
 	int id;
-	queue<Customer> queue;
+	queue<Customer*> queue;
 	HANDLE mutex;
 	HANDLE thread;
 	int total_sum = 0;
 
-	Cashier(int id, Customer customer) {
+	Cashier(int id, Customer* customer) {
 		this->id = id;
 		this->queue.push(customer);
 		this->mutex = CreateMutex(NULL, 0, NULL);
@@ -83,7 +90,6 @@ struct Cashier
 	{
 		CloseHandle(this->mutex);
 		CloseHandle(this->thread);
-		this->mutex = NULL;
 	}
 
 	bool lockQueue()
@@ -106,15 +112,14 @@ struct Cashier
 	}
 };
 
-Cashier chooseCashier(Customer customer);
-bool addCashier(Customer customer);
+void chooseCashier(Customer* customer);
+bool addCashier(Customer* customer);
+string readFromPipe(HANDLE hPipe);
 
-vector<Cashier> cashiers;
+vector<Cashier*> cashiers;
 int cashiersMaxCount;
 int customerCount = 0;
-
-char* buf = new char[BUFSIZE];
-DWORD dwBytes;
+bool withManager = false;
 
 int main()
 {
@@ -133,17 +138,15 @@ int main()
 		waitingForCustomer(hPipe);
 
 		// Читаем информацию по сумме
-		if (!ReadFile(hPipe, buf, BUFSIZE, &dwBytes, NULL)) {
-			printf("Ошибка получения данных от клиента.\n");
-			system("pause");
-			exit(1);
-		}
-
-		string msg(buf, 0, dwBytes);
+		string msg = readFromPipe(hPipe);
 		int sum = atoi(msg.c_str());
 
-		Customer customer(++customerCount, hPipe, sum);
-		Cashier cashier = chooseCashier(customer);
+		Customer* customer = new Customer(++customerCount, hPipe, sum);
+
+		// Пишем информацию о номере покупателя
+		customer->send(to_string(customer->id));
+
+		chooseCashier(customer);
 	}
 }
 
@@ -174,52 +177,86 @@ void waitingForCustomer(HANDLE& pipe)
 	}
 }
 
-Cashier chooseCashier(Customer customer)
+string readFromPipe(HANDLE hPipe)
+{
+	char* buf = new char[BUFSIZE];
+	DWORD dwBytes;
+	if (!ReadFile(hPipe, buf, BUFSIZE, &dwBytes, NULL)) {
+		printf("Ошибка получения данных от клиента.\n");
+		system("pause");
+		exit(1);
+	}
+
+	string msg(buf, 0, dwBytes);
+	return msg;
+}
+
+void writeToPipe(HANDLE hPipe, string str)
+{
+	DWORD dwBytes;
+	if (!WriteFile(hPipe, str.c_str(), size(str), &dwBytes, NULL)) {
+		printf("Ошибка при передаче данных на сервер.\n");
+		system("pause");
+		exit(1);
+	}
+}
+
+void chooseCashier(Customer* customer)
 {
 	// если еще нет ни одного кассира за кассой зовем первого
 	if (cashiers.size() == 0) {
 		addCashier(customer);
-		return cashiers.at(cashiers.size() - 1);
+		return;
 	}
 
 	// если кассиры есть, выбираем случайного
 	int cashierIndex;
 	cashierIndex = rand() % cashiers.size();
-	Cashier cashier = cashiers.at(cashierIndex);
+	Cashier* cashier = cashiers.at(cashierIndex);
 
-	if (!cashier.lockQueue())
+	if (!cashier->lockQueue())
 	{
-		printf("Не удалось заблокировать очередь на кассе %d\n", cashier.id);
+		printf("Не удалось заблокировать очередь на кассе %d\n", cashier->id);
 		system("pause");
 		exit(1);
 	}
 
 	// если на кассе 3 и более человек в очереди, пробуем позвать нового кассира
-	if (cashier.queue.size() > 2)
+	if (cashier->queue.size() > 2)
 	{
 		if (addCashier(customer))
 		{
-			cashier.unlockQueue();
-			return cashiers.at(cashiers.size() - 1);
+			cashier->unlockQueue();
+			return;
 		}
 	}
 
-	cashier.queue.push(customer);
-	cashier.unlockQueue();
-	return cashier;
+	cashier->queue.push(customer);
+
+	// передаем клиенту номер кассы
+	customer->send(to_string(cashier->id));
+
+	cashier->unlockQueue();
 }
 
-bool addCashier(Customer customer)
+bool addCashier(Customer* customer)
 {
 	if (cashiers.size() < cashiersMaxCount)
 	{
 		int cashier_id = cashiers.size() + 1;
 		printf("Позвали нового кассира %d\n", cashier_id);
 
-		Cashier cashier(cashier_id, customer);
+		// передаем клиенту номер кассы
+		customer->send(to_string(cashier_id));
+
+		Cashier* cashier = new Cashier(cashier_id, customer);
 		cashiers.push_back(cashier);
+
 		return true;
 	}
+
+	printf("Все кассиры заняты, зовем управляющего");
+	withManager = true;
 
 	return false;
 }
@@ -240,20 +277,32 @@ DWORD WINAPI worker(LPVOID lpParam)
 		}
 
 		if (cashier->queue.size() == 0) {
+			cashier->unlockQueue();
 			Sleep(1000);
 			continue;
 		}
-		Customer* customer = &cashier->queue.front();
+
+		Customer* customer = cashier->queue.front();
+
+		int queueSize = cashier->queue.size();
+		printf("Кассир %d начинает обслуживать следующего покупателя. Длина очереди - %d человек\n",
+			cashier->id, queueSize);
+
 		cashier->queue.pop();
+		queueSize = cashier->queue.size();
+		printf("Обслуживаем покупателя %d на кассе %d. Сумма покупки %d руб\n",
+			customer->id, cashier->id, customer->sum);
 
 		cashier->unlockQueue();
 
-
-		printf("Обслуживаем покупателя %d на кассе %d\n", customer->id, cashier->id);
-		Sleep(2000);
+		// считаем, что время обслуживания зависит от суммы заказа
+		// если смотрит управляющий, то скорость увеличивается в 2 раза
+		int serveTime = withManager ? customer->sum / 2 : customer->sum;
+		Sleep(serveTime);
 		cashier->total_sum += customer->sum;
 
-		printf("Обслужили покупателя %d на кассе %d\n", customer->id, cashier->id);
+		printf("Обслужили покупателя %d на кассе %d. В очереди осталось %d человек\n",
+			customer->id, cashier->id, queueSize);
 		customer->send("Done");
 		delete customer;
 	}

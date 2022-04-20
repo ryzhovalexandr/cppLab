@@ -36,13 +36,10 @@ int main()
 	}
 
 	string msg = readData(hPipe);
-	printf("Порядковый номер клиента: %s", msg.c_str());
+	printf("Порядковый номер покупателя: %s\n", msg.c_str());
 
 	msg = readData(hPipe);
-	printf("Номер кассира: %s", msg.c_str());
-
-	msg = readData(hPipe);
-	printf("Номер в очереди: %s", msg.c_str());
+	printf("Номер кассира: %s\n", msg.c_str());
 
 	msg = readData(hPipe);
 	if (!strcmp(msg.c_str(), "Done"))
