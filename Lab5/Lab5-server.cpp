@@ -53,7 +53,7 @@ struct Customer
 
 	~Customer()
 	{
-		printf("Покупатель %d не успел купить товар\n", this->id);
+		printf("Покупатель %d ушел\n", this->id);
 		CloseHandle(hPipe);
 	}
 
@@ -104,11 +104,13 @@ struct Cashier
 		{
 			Customer* customer = queue.front();
 			queue.pop();
+			printf("Покупатель %d не успел купить товары\n", customer->id);
 			delete customer;
 		}
 	}
 	void addToQueue(Customer* customer)
 	{
+		printf("Покупатель %d выбрал кассу %d\n", customer->id, id);
 		this->queue.push(customer);
 		this->total_customers++;
 		this->total_sum += customer->sum;
@@ -163,11 +165,14 @@ int main()
 			break;
 		}
 
+		int customerId = ++customerCount;
+		printf("Новый покупатель %d подошел к кассам\n", customerId);
+
 		// Читаем информацию по сумме
 		string msg = readFromPipe(hPipe);
 		int sum = atoi(msg.c_str());
 
-		Customer* customer = new Customer(++customerCount, hPipe, sum);
+		Customer* customer = new Customer(customerId, hPipe, sum);
 
 		// Пишем информацию о номере покупателя
 		customer->send(to_string(customer->id));
@@ -187,6 +192,8 @@ int main()
 	cashiers.clear();
 
 	printf("Всего магазин обслужил %d покупателей на сумму %d рублей\n", total_customers, total_sum);
+	system("pause");
+	exit(0);
 }
 
 HANDLE createPipe()
@@ -218,7 +225,6 @@ bool waitingForCustomer(HANDLE& pipe, steady_clock::time_point start)
 
 		if (ConnectNamedPipe(pipe, NULL))
 		{
-			printf("Новый покупатель подошел к кассам\n");
 			return true;
 		}
 	}
@@ -302,7 +308,7 @@ bool addCashier(Customer* customer)
 		return true;
 	}
 
-	printf("Все кассиры заняты, зовем управляющего");
+	printf("Все кассиры заняты, зовем управляющего\n");
 	withManager = true;
 
 	return false;
@@ -344,8 +350,8 @@ DWORD WINAPI worker(LPVOID lpParam)
 
 		// считаем, что время обслуживания зависит от суммы заказа
 		// если смотрит управляющий, то скорость увеличивается в 2 раза
-		int serveTime = withManager ? customer->sum / 2 : customer->sum;
-		Sleep(serveTime);
+		int serveTime = withManager ? SERVE_TIME_IN_SEC / 2 : SERVE_TIME_IN_SEC;
+		Sleep(serveTime * 1000);
 
 		printf("Обслужили покупателя %d на кассе %d. В очереди осталось %d человек\n",
 			customer->id, cashier->id, queueSize);

@@ -16,13 +16,11 @@ string readData(HANDLE hPipe);
 int main()
 {
 	setlocale(LC_ALL, "Russian");
+	srand(time(0));
 
 	printf("Покупатель начал свои покупки. process id=%d\n", GetCurrentProcessId());
 
-	int duration = rand() % 9000 + 1000;
-	Sleep(duration);
-
-	int sum = rand() % 14000 + 1000;
+	int sum = rand() % 9000 + 1000;
 	printf("Покупатель набрал товар на сумму %d руб и пошел к кассам\n", sum);
 
 	HANDLE hPipe = createPipe();
