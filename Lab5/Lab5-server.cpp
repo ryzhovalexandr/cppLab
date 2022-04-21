@@ -24,14 +24,18 @@
 #include <vector>
 #include <queue>
 #include <string>
+#include <chrono>
 
 #define BUFSIZE 1024
+#define SERVE_TIME_IN_SEC 5
+#define WORK_TIME_IN_SEC 60
 
 using namespace std;
+using namespace std::chrono;
 
 DWORD WINAPI worker(LPVOID lpParam);
 HANDLE createPipe();
-void waitingForCustomer(HANDLE& pipe);
+bool waitingForCustomer(HANDLE& pipe, steady_clock::time_point);
 void writeToPipe(HANDLE hPipe, string str);
 
 // Покупатель
@@ -49,6 +53,7 @@ struct Customer
 
 	~Customer()
 	{
+		printf("Покупатель %d не успел купить товар", this->id);
 		CloseHandle(hPipe);
 	}
 
@@ -66,10 +71,12 @@ struct Cashier
 	HANDLE mutex;
 	HANDLE thread;
 	int total_sum = 0;
+	int total_customers = 0;
 
 	Cashier(int id, Customer* customer) {
 		this->id = id;
-		this->queue.push(customer);
+		addToQueue(customer);
+
 		this->mutex = CreateMutex(NULL, 0, NULL);
 		if (!this->mutex) {
 			printf("Ошибка при создании мьютекса: %d\n", GetLastError());
@@ -88,8 +95,23 @@ struct Cashier
 
 	~Cashier()
 	{
+		printf("Кассир %d уходит домой. Он успел обслужить %d покупателей на сумму %d рублей",
+			this->id, total_customers, total_sum);
 		CloseHandle(this->mutex);
 		CloseHandle(this->thread);
+
+		while (!this->queue.empty())
+		{
+			Customer* customer = queue.front();
+			queue.pop();
+			delete customer;
+		}
+	}
+	void addToQueue(Customer* customer)
+	{
+		this->queue.push(customer);
+		this->total_customers++;
+		this->total_sum += customer->sum;
 	}
 
 	bool lockQueue()
@@ -126,16 +148,20 @@ int main()
 	setlocale(LC_ALL, "Russian");
 	srand(time(NULL));
 
+	printf("Время обслуживания одного клиента: %d секунд\n", SERVE_TIME_IN_SEC);
+	printf("Время работы магазина: %d секунд\n", WORK_TIME_IN_SEC);
 	printf("Введите количество кассиров X: ");
 	cin >> cashiersMaxCount;
 
 	printf("Магазин начал свою работу. Ждем покупателей.\n");
-
+	steady_clock::time_point start = high_resolution_clock::now();
 	while (true)
 	{
 		// создаем канал и ждем очередного покупателя
 		HANDLE hPipe = createPipe();
-		waitingForCustomer(hPipe);
+		if (!waitingForCustomer(hPipe, start)) {
+			break;
+		}
 
 		// Читаем информацию по сумме
 		string msg = readFromPipe(hPipe);
@@ -148,6 +174,19 @@ int main()
 
 		chooseCashier(customer);
 	}
+
+	int total_customers = 0;
+	int total_sum = 0;
+	for (int i = 0; i < cashiers.size(); i++) {
+		Cashier* cashier = cashiers.at(i);
+		total_customers += cashier->total_customers;
+		total_sum += cashier->total_sum;
+
+		delete cashier;
+	}
+	cashiers.clear();
+
+	printf("Всего магазин обслужил %d покупателей на сумму %d рублей", total_customers, total_sum);
 }
 
 HANDLE createPipe()
@@ -166,13 +205,21 @@ HANDLE createPipe()
 	return pipe;
 }
 
-void waitingForCustomer(HANDLE& pipe)
+bool waitingForCustomer(HANDLE& pipe, steady_clock::time_point start)
 {
 	while (true) {
+		steady_clock::time_point stop = high_resolution_clock::now();
+		auto duration = duration_cast<seconds>(stop - start);
+		if (duration.count() > WORK_TIME_IN_SEC)
+		{
+			printf("Магазин отработал %d секунд, пора закрываться приходите завтра", WORK_TIME_IN_SEC);
+			return false;
+		}
+
 		if (ConnectNamedPipe(pipe, NULL))
 		{
 			printf("Новый покупатель подошел к кассам\n");
-			break;
+			return true;
 		}
 	}
 }
@@ -231,7 +278,7 @@ void chooseCashier(Customer* customer)
 		}
 	}
 
-	cashier->queue.push(customer);
+	cashier->addToQueue(customer);
 
 	// передаем клиенту номер кассы
 	customer->send(to_string(cashier->id));
@@ -299,7 +346,6 @@ DWORD WINAPI worker(LPVOID lpParam)
 		// если смотрит управляющий, то скорость увеличивается в 2 раза
 		int serveTime = withManager ? customer->sum / 2 : customer->sum;
 		Sleep(serveTime);
-		cashier->total_sum += customer->sum;
 
 		printf("Обслужили покупателя %d на кассе %d. В очереди осталось %d человек\n",
 			customer->id, cashier->id, queueSize);
