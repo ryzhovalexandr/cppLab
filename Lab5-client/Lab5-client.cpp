@@ -49,13 +49,13 @@ int main()
 	else
 	{
 		printf("Получена неизвестная команда - %s.\n", msg.c_str());
+		system("pause");
+		exit(1);
 	}
 
 	delete buf;
 	CloseHandle(hPipe);
 
-
-	system("pause");
 	return 0;
 }
 

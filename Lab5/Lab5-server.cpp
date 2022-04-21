@@ -35,7 +35,7 @@ using namespace std::chrono;
 
 DWORD WINAPI worker(LPVOID lpParam);
 HANDLE createPipe();
-bool waitingForCustomer(HANDLE& pipe, steady_clock::time_point);
+bool waitingForCustomer(HANDLE& pipe, steady_clock::time_point start);
 void writeToPipe(HANDLE hPipe, string str);
 
 // Покупатель
@@ -53,7 +53,7 @@ struct Customer
 
 	~Customer()
 	{
-		printf("Покупатель %d не успел купить товар", this->id);
+		printf("Покупатель %d не успел купить товар\n", this->id);
 		CloseHandle(hPipe);
 	}
 
@@ -95,7 +95,7 @@ struct Cashier
 
 	~Cashier()
 	{
-		printf("Кассир %d уходит домой. Он успел обслужить %d покупателей на сумму %d рублей",
+		printf("Кассир %d уходит домой. Он успел обслужить %d покупателей на сумму %d рублей\n",
 			this->id, total_customers, total_sum);
 		CloseHandle(this->mutex);
 		CloseHandle(this->thread);
@@ -186,7 +186,7 @@ int main()
 	}
 	cashiers.clear();
 
-	printf("Всего магазин обслужил %d покупателей на сумму %d рублей", total_customers, total_sum);
+	printf("Всего магазин обслужил %d покупателей на сумму %d рублей\n", total_customers, total_sum);
 }
 
 HANDLE createPipe()
@@ -212,7 +212,7 @@ bool waitingForCustomer(HANDLE& pipe, steady_clock::time_point start)
 		auto duration = duration_cast<seconds>(stop - start);
 		if (duration.count() > WORK_TIME_IN_SEC)
 		{
-			printf("Магазин отработал %d секунд, пора закрываться приходите завтра", WORK_TIME_IN_SEC);
+			printf("Магазин отработал %d секунд, пора закрываться приходите завтра\n", WORK_TIME_IN_SEC);
 			return false;
 		}
 
