@@ -20,13 +20,17 @@
 */
 
 #include <iostream>
-#include <windows.h>
 #include <vector>
 #include <queue>
 #include <string>
 #include <chrono>
+#include <WinSock2.h>
+#pragma comment(lib, "ws2_32.lib")
 
-#define BUFSIZE 1024
+#pragma warning(disable: 4996)
+
+#define BUFSIZE 30
+#define MY_PORT 2222
 #define SERVE_TIME_IN_SEC 5
 #define WORK_TIME_IN_SEC 60
 
@@ -34,32 +38,30 @@ using namespace std;
 using namespace std::chrono;
 
 DWORD WINAPI worker(LPVOID lpParam);
-HANDLE createPipe();
-bool waitingForCustomer(HANDLE& pipe, steady_clock::time_point start);
-void writeToPipe(HANDLE hPipe, string str);
 
 // Покупатель
 struct Customer
 {
 	int id;
-	HANDLE hPipe;
+	SOCKET connection;
 	int sum;
 
-	Customer(int id, HANDLE hPipe, int sum) {
+	Customer(int id, SOCKET connection, int sum) {
 		this->id = id;
-		this->hPipe = hPipe;
+		this->connection = connection;
 		this->sum = sum;
 	};
 
 	~Customer()
 	{
 		printf("Покупатель %d ушел\n", this->id);
-		CloseHandle(hPipe);
+		shutdown(this->connection, SD_SEND);
+		closesocket(this->connection);
 	}
 
-	void send(string message)
+	void sendMessage(string message)
 	{
-		writeToPipe(hPipe, message);
+		send(this->connection, message.c_str(), sizeof(message.c_str()), NULL);
 	}
 };
 
@@ -145,7 +147,7 @@ struct Cashier
 
 void chooseCashier(Customer* customer);
 bool addCashier(Customer* customer);
-string readFromPipe(HANDLE hPipe);
+string readFromSocket(SOCKET connection);
 
 vector<Cashier*> cashiers;
 int cashiersMaxCount;
@@ -166,28 +168,65 @@ int main()
 
 	// Запоминаем время открытия магазина, чтобы закрыться во время
 	steady_clock::time_point start = high_resolution_clock::now();
+
+	// загружаем WSAStartup
+	WSAData wsaData; //создаем структуру для загрузки
+	WORD DLLVersion = MAKEWORD(2, 1);
+	if (WSAStartup(DLLVersion, &wsaData) != 0)
+	{
+		printf("Ошибка инициализации TCP %d\n", WSAGetLastError());
+		exit(1);
+	}
+
+	SOCKADDR_IN addr;
+	int sizeofaddr = sizeof(addr); //размер
+	addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	addr.sin_port = htons(MY_PORT); //порт
+	addr.sin_family = AF_INET; //семейство протоколов
+
+	//сокет для прослушивания порта
+	SOCKET sListen = socket(AF_INET, SOCK_STREAM, NULL);
+
+	//привязка адреса сокету
+	bind(sListen, (SOCKADDR*)&addr, sizeof(addr));
+
+	// прослушивание, сколько запросов ожидается
+	listen(sListen, 1000);
+
 	while (true)
 	{
-		// создаем канал и ждем очередного покупателя
-		HANDLE hPipe = createPipe();
-		if (!waitingForCustomer(hPipe, start)) {
+		steady_clock::time_point stop = high_resolution_clock::now();
+		auto duration = duration_cast<seconds>(stop - start);
+		if (duration.count() > WORK_TIME_IN_SEC)
+		{
+			printf("Магазин отработал %d секунд, пора закрываться приходите завтра\n", WORK_TIME_IN_SEC);
 			break;
+		}
+
+		SOCKET connection = accept(sListen, (SOCKADDR*)&addr, &sizeofaddr);
+		if (connection == 0)
+		{
+			printf("Не удалось создать соединение");
+			exit(1);
 		}
 
 		int customerId = ++customerCount;
 		printf("Новый покупатель %d подошел к кассам\n", customerId);
 
 		// Читаем информацию по сумме
-		string msg = readFromPipe(hPipe);
+		string msg = readFromSocket(connection);
 		int sum = atoi(msg.c_str());
 
-		Customer* customer = new Customer(customerId, hPipe, sum);
+		Customer* customer = new Customer(customerId, connection, sum);
 
 		// Пишем информацию о номере покупателя
-		customer->send(to_string(customer->id));
+		customer->sendMessage(to_string(customer->id));
 
 		chooseCashier(customer);
 	}
+
+	closesocket(sListen);
+	WSACleanup();
 
 	// Вычисляем итоговую статистику
 	int total_customers = 0;
@@ -206,63 +245,11 @@ int main()
 	exit(0);
 }
 
-HANDLE createPipe()
-{
-	// Создаём именованный канал для следующего покупателя
-	HANDLE pipe = CreateNamedPipe(TEXT("\\\\.\\pipe\\shop"), PIPE_ACCESS_DUPLEX,
-		PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-		PIPE_UNLIMITED_INSTANCES, BUFSIZE, BUFSIZE, 0, NULL);
-
-	if (pipe == INVALID_HANDLE_VALUE) {
-		printf("Ошибка при создании именованного канала: %d\n", GetLastError());
-		system("pause");
-		exit(1);
-	}
-
-	return pipe;
-}
-
-bool waitingForCustomer(HANDLE& pipe, steady_clock::time_point start)
-{
-	while (true) {
-		// проверяем, что рабочий день закончился
-		steady_clock::time_point stop = high_resolution_clock::now();
-		auto duration = duration_cast<seconds>(stop - start);
-		if (duration.count() > WORK_TIME_IN_SEC)
-		{
-			printf("Магазин отработал %d секунд, пора закрываться приходите завтра\n", WORK_TIME_IN_SEC);
-			return false;
-		}
-
-		if (ConnectNamedPipe(pipe, NULL))
-		{
-			return true;
-		}
-	}
-}
-
-string readFromPipe(HANDLE hPipe)
+string readFromSocket(SOCKET connection)
 {
 	char* buf = new char[BUFSIZE];
-	DWORD dwBytes;
-	if (!ReadFile(hPipe, buf, BUFSIZE, &dwBytes, NULL)) {
-		printf("Ошибка получения данных от клиента.\n");
-		system("pause");
-		exit(1);
-	}
-
-	string msg(buf, 0, dwBytes);
-	return msg;
-}
-
-void writeToPipe(HANDLE hPipe, string str)
-{
-	DWORD dwBytes;
-	if (!WriteFile(hPipe, str.c_str(), size(str), &dwBytes, NULL)) {
-		printf("Ошибка при передаче данных на сервер.\n");
-		system("pause");
-		exit(1);
-	}
+	int len = recv(connection, buf, sizeof(buf), NULL);
+	return string(buf, 0, len);
 }
 
 void chooseCashier(Customer* customer)
@@ -298,7 +285,7 @@ void chooseCashier(Customer* customer)
 	cashier->addToQueue(customer);
 
 	// передаем клиенту номер кассы
-	customer->send(to_string(cashier->id));
+	customer->sendMessage(to_string(cashier->id));
 
 	cashier->unlockQueue();
 }
@@ -312,7 +299,7 @@ bool addCashier(Customer* customer)
 		printf("Позвали нового кассира %d\n", cashier_id);
 
 		// передаем клиенту номер кассы
-		customer->send(to_string(cashier_id));
+		customer->sendMessage(to_string(cashier_id));
 
 		Cashier* cashier = new Cashier(cashier_id, customer);
 		cashiers.push_back(cashier);
@@ -374,12 +361,13 @@ DWORD WINAPI worker(LPVOID lpParam)
 
 		printf("Обслужили покупателя %d на кассе %d. В очереди осталось %d человек\n",
 			customer->id, cashier->id, queueSize);
-		customer->send("Done");
+		customer->sendMessage("Done");
 		delete customer;
 	}
 
 	printf("Завершили обслуживание на кассе %d\n", cashier->id);
 	cashier->waitForClosing = false;
+	return 0;
 }
 
 

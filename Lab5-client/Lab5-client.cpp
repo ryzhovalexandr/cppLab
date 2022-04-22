@@ -1,45 +1,69 @@
 ﻿
+#pragma comment(lib, "ws2_32.lib")
+#include <winsock2.h>
 #include <iostream>
-#include <windows.h>
+#pragma warning(disable: 4996)
 #include <string>
 
-#define BUFSIZE 1024
+#define BUFSIZE 50
+#define MY_PORT 2222
 
 using namespace std;
 
 char* buf = new char[BUFSIZE];
 DWORD dwBytes;
 
-HANDLE createPipe();
-string readData(HANDLE hPipe);
+string readData(SOCKET connection);
+void writeData(SOCKET connection, string msg);
 
 int main()
 {
 	setlocale(LC_ALL, "Russian");
 	srand(time(0));
 
+	//загружаем WSAStartup
+	WSAData wsaData; //создаем структуру для загрузки
+	WORD DLLVersion = MAKEWORD(2, 1);
+	if (WSAStartup(DLLVersion, &wsaData) != 0)
+	{
+		//проверка на подключение библиотеки
+		printf("Ошибка инициализации сокетов\n");
+		system("pause");
+		exit(1);
+	}
+
 	printf("Покупатель начал свои покупки. process id=%d\n", GetCurrentProcessId());
 
 	int sum = rand() % 9000 + 1000;
 	printf("Покупатель набрал товар на сумму %d руб и пошел к кассам\n", sum);
 
-	HANDLE hPipe = createPipe();
+	SOCKADDR_IN addr;
+	//параметры адреса сокета
+	int sizeofaddr = sizeof(addr);//размер
+	addr.sin_addr.s_addr = inet_addr("127.0.0.1");//адрес
+	addr.sin_port = htons(MY_PORT);//порт
+	addr.sin_family = AF_INET;//семейство протоколов
 
-	string s_sum = to_string(sum);
-	DWORD dwBytes;
-	if (!WriteFile(hPipe, s_sum.c_str(), size(s_sum), &dwBytes, NULL)) {
-		printf("Ошибка при передаче данных на сервер.\n");
+	//сокет для соединения с сервером
+	SOCKET connection = socket(AF_INET, SOCK_STREAM, NULL);
+
+	//проверка на подключение к серверу
+	if (connect(connection, (SOCKADDR*)&addr, sizeof(addr)) != 0)
+	{
+		printf("Ошибка подключения к серверу %d\n", WSAGetLastError());
 		system("pause");
 		exit(1);
 	}
 
-	string msg = readData(hPipe);
+	writeData(connection, to_string(sum));
+
+	string msg = readData(connection);
 	printf("Порядковый номер покупателя: %s\n", msg.c_str());
 
-	msg = readData(hPipe);
+	msg = readData(connection);
 	printf("Номер кассира: %s\n", msg.c_str());
 
-	msg = readData(hPipe);
+	msg = readData(connection);
 	if (!strcmp(msg.c_str(), "Done"))
 	{
 		printf("Покупка успешно завершена.\n");
@@ -52,46 +76,23 @@ int main()
 	}
 
 	delete buf;
-	CloseHandle(hPipe);
+
+	closesocket(connection);
+	WSACleanup();
 
 	return 0;
 }
 
-HANDLE createPipe()
+string readData(SOCKET connection)
 {
-	while (true)
-	{
-		HANDLE hPipe = CreateFile(TEXT("\\\\.\\pipe\\shop"), GENERIC_READ | GENERIC_WRITE, NULL, NULL, OPEN_EXISTING, NULL, NULL);
-
-		if (hPipe != INVALID_HANDLE_VALUE)
-		{
-			return hPipe;
-		}
-
-		if (GetLastError() != ERROR_PIPE_BUSY) {
-			printf("Не могу открыть именованный канал.\n");
-			system("pause");
-			exit(1);
-		}
-
-		if (!WaitNamedPipe(TEXT("\\\\.\\pipe\\shop"), 10000)) {
-			printf("Не дождались открытия магазина в течение 10 секунд\n");
-			system("pause");
-			exit(1);
-		}
-	}
+	char* buf = new char[BUFSIZE];
+	int len = recv(connection, buf, sizeof(buf), NULL);
+	return string(buf, 0, len);
 }
 
-string readData(HANDLE hPipe)
+void writeData(SOCKET connection, string msg)
 {
-	if (!ReadFile(hPipe, buf, BUFSIZE, &dwBytes, NULL)) {
-		printf("Ошибка получения данных из канала.\n");
-		system("pause");
-		exit(1);
-	}
-
-	string msg(buf, 0, dwBytes);
-	return msg;
+	send(connection, msg.c_str(), sizeof(msg.c_str()), 0);
 }
 
 
