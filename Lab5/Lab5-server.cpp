@@ -72,6 +72,7 @@ struct Cashier
 	HANDLE thread;
 	int total_sum = 0;
 	int total_customers = 0;
+	bool waitForClosing = false;
 
 	Cashier(int id, Customer* customer) {
 		this->id = id;
@@ -95,6 +96,12 @@ struct Cashier
 
 	~Cashier()
 	{
+		this->waitForClosing = true;
+		while (this->waitForClosing)
+		{
+			Sleep(100);
+		}
+
 		printf("Кассир %d уходит домой. Он успел обслужить %d покупателей на сумму %d рублей\n",
 			this->id, total_customers, total_sum);
 		CloseHandle(this->mutex);
@@ -156,6 +163,8 @@ int main()
 	cin >> cashiersMaxCount;
 
 	printf("Магазин начал свою работу. Ждем покупателей.\n");
+
+	// Запоминаем время открытия магазина, чтобы закрыться во время
 	steady_clock::time_point start = high_resolution_clock::now();
 	while (true)
 	{
@@ -180,6 +189,7 @@ int main()
 		chooseCashier(customer);
 	}
 
+	// Вычисляем итоговую статистику
 	int total_customers = 0;
 	int total_sum = 0;
 	for (int i = 0; i < cashiers.size(); i++) {
@@ -215,6 +225,7 @@ HANDLE createPipe()
 bool waitingForCustomer(HANDLE& pipe, steady_clock::time_point start)
 {
 	while (true) {
+		// проверяем, что рабочий день закончился
 		steady_clock::time_point stop = high_resolution_clock::now();
 		auto duration = duration_cast<seconds>(stop - start);
 		if (duration.count() > WORK_TIME_IN_SEC)
@@ -263,8 +274,8 @@ void chooseCashier(Customer* customer)
 	}
 
 	// если кассиры есть, выбираем случайного
-	int cashierIndex;
-	cashierIndex = rand() % cashiers.size();
+	srand(time(0));
+	int cashierIndex = rand() % cashiers.size();
 	Cashier* cashier = cashiers.at(cashierIndex);
 
 	if (!cashier->lockQueue())
@@ -294,6 +305,7 @@ void chooseCashier(Customer* customer)
 
 bool addCashier(Customer* customer)
 {
+	// пытаемся добавить нового кассира
 	if (cashiers.size() < cashiersMaxCount)
 	{
 		int cashier_id = cashiers.size() + 1;
@@ -322,6 +334,11 @@ DWORD WINAPI worker(LPVOID lpParam)
 
 	while (true)
 	{
+		if (cashier->waitForClosing)
+		{
+			break;
+		}
+
 		if (!cashier->lockQueue())
 		{
 			printf("Ошибка блокировки очереди на кассе %d\n", cashier->id);
@@ -329,9 +346,11 @@ DWORD WINAPI worker(LPVOID lpParam)
 			exit(1);
 		}
 
-		if (cashier->queue.size() == 0) {
+		if (cashier->queue.size() == 0)
+		{
 			cashier->unlockQueue();
-			Sleep(1000);
+
+			Sleep(100);
 			continue;
 		}
 
@@ -359,9 +378,8 @@ DWORD WINAPI worker(LPVOID lpParam)
 		delete customer;
 	}
 
-	printf("Завершаем обслуживание на кассе %d\n", cashier->id);
-	system("pause");
-	ExitThread(0);
+	printf("Завершили обслуживание на кассе %d\n", cashier->id);
+	cashier->waitForClosing = false;
 }
 
 
